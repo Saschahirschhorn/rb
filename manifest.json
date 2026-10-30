@@ -1,7 +1,9 @@
 {
   "name": "Regiebericht",
   "short_name": "Regiebericht",
+  "id": "./",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#efe9e1",
   "theme_color": "#8f6a43",

@@ -6,7 +6,9 @@
 <meta name="robots" content="noindex,nofollow">
 <title>Regiebericht</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Regiebericht">
+<meta name="theme-color" content="#8f6a43">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-180.png">
 <link rel="manifest" href="manifest.json">
@@ -25,11 +27,13 @@ button{font:inherit;font-weight:600;border:1px solid var(--accent);background:va
 button:disabled{opacity:.5}
 .hint{font-size:13px;color:var(--muted)}
 .fehler{color:var(--warn);font-size:14px}
+.tipp{font-size:13px;border-top:1px solid var(--line);padding-top:10px}
+#laden{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
-<div id="laden" class="hint">Wird geladen …</div>
+<div id="laden"><div class="hint" id="laden-text">Wird geladen …</div><button type="button" id="nochmal" hidden>Nochmal versuchen</button></div>
 <form id="anmelden" hidden autocomplete="on">
   <h1>Regiebericht</h1>
   <div class="hint">Anmelden mit Kürzel oder E-Mail-Adresse.</div>
@@ -37,24 +41,46 @@ button:disabled{opacity:.5}
   <div><label for="pw">Passwort</label><input id="pw" name="password" type="password" autocomplete="current-password" required></div>
   <button type="submit">Anmelden</button>
   <div class="fehler" id="fehler" hidden></div>
+  <div class="hint">Du musst dich nur einmal anmelden. Danach bleibst du auf diesem Gerät angemeldet, bis du in der App auf „Abmelden“ tippst.</div>
+  <div class="hint tipp" id="tipp" hidden>Tipp fürs iPhone: Zuerst in Safari auf Teilen und dann auf „Zum Home-Bildschirm“ tippen. Die App dann über das neue Symbol öffnen und dort anmelden. So bleibst du angemeldet.</div>
 </form>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 (function(){
-/* Öffentlicher Schlüssel: gibt nur das frei, was die Datenbank-Regeln einem Angemeldeten erlauben */
-const sb=supabase.createClient('https://xjglgphkbnuhyrxavhtp.supabase.co','sb_publishable_s8V5irVcqm5o9lbsTY5vNg_eB_35Rgj');
 const $=id=>document.getElementById(id);
+function laden(text,knopf){
+  $('anmelden').hidden=true;$('laden').hidden=false;
+  $('laden-text').textContent=text||'Wird geladen …';$('nochmal').hidden=!knopf;
+}
+/* Kein Netz (z. B. Funkloch): nicht abmelden, die Anmeldung bleibt gespeichert */
+function keinNetz(){laden('Keine Verbindung. Du bleibst angemeldet. Bitte nochmal versuchen, wenn du wieder Empfang hast.',true);}
+$('nochmal').onclick=()=>location.reload();
+/* Schlechter Empfang: die Anmeldung versucht es bis zu 30 s weiter; nach 10 s schon „Nochmal versuchen“ anbieten */
+setTimeout(()=>{const l=$('laden'),n=$('nochmal');if(l&&n&&!l.hidden&&n.hidden)laden('Die Verbindung ist langsam. Du bleibst angemeldet. Bitte warten oder nochmal versuchen.',true);},10000);
+if(typeof supabase==='undefined'){keinNetz();return;}
+/* iPhone/iPad in Safari: Website-Speicher wird nach einigen Tagen ohne Nutzung gelöscht, die App auf dem Home-Bildschirm nicht */
+const ios=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const homeBildschirm=navigator.standalone===true||matchMedia('(display-mode: standalone)').matches;
+$('tipp').hidden=!(ios&&!homeBildschirm);
+/* Öffentlicher Schlüssel: gibt nur das frei, was die Datenbank-Regeln einem Angemeldeten erlauben.
+   Die Anmeldung wird dauerhaft im Gerät gespeichert (localStorage) und automatisch erneuert. */
+const sb=supabase.createClient('https://xjglgphkbnuhyrxavhtp.supabase.co','sb_publishable_s8V5irVcqm5o9lbsTY5vNg_eB_35Rgj',
+  {auth:{persistSession:true,autoRefreshToken:true}});
+/* Netz- oder Serverfehler (kein Status, Status 0 oder 5xx) – im Gegensatz zu „Zugang abgelehnt“ */
+const netzfehler=e=>!navigator.onLine||!e||!e.status||e.status>=500||e.name==='AuthRetryableFetchError'||e.name==='StorageUnknownError';
 function formular(meldung){
   $('laden').hidden=true;$('anmelden').hidden=false;
   $('fehler').hidden=!meldung;$('fehler').textContent=meldung||'';
 }
 /* App aus dem geschützten Speicher holen; klappt nur für freigeschaltete Mitglieder */
 async function appLaden(){
-  const {data:{user}}=await sb.auth.getUser();
-  if(!user){formular();return;}
-  $('laden').hidden=false;$('anmelden').hidden=true;
+  const {data:{session},error:se}=await sb.auth.getSession();
+  if(se&&netzfehler(se)){keinNetz();return;}
+  if(!session){formular();return;}
+  laden();
   const {data,error}=await sb.storage.from('app').download('app.html');
-  if(error||!data){await sb.auth.signOut();formular('Dein Zugang ist noch nicht freigeschaltet. Bitte im Büro Bescheid geben.');return;}
+  if(error&&netzfehler(error)){keinNetz();return;}
+  if(error||!data){await sb.auth.signOut({scope:'local'});formular('Dein Zugang ist noch nicht freigeschaltet. Bitte im Büro Bescheid geben.');return;}
   const html=await data.text();
   document.open();document.write(html);document.close();
 }
@@ -65,10 +91,10 @@ $('anmelden').addEventListener('submit',async e=>{
   const b=e.target.querySelector('button');b.disabled=true;
   const {error}=await sb.auth.signInWithPassword({email,password:pw});
   b.disabled=false;
-  if(error){formular('Anmeldung hat nicht geklappt. Kürzel und Passwort prüfen.');return;}
-  appLaden();
+  if(error){formular(netzfehler(error)?'Keine Verbindung. Bitte nochmal versuchen, wenn du wieder Empfang hast.':'Anmeldung hat nicht geklappt. Kürzel und Passwort prüfen.');return;}
+  appLaden().catch(keinNetz);
 });
-appLaden().catch(()=>formular('Keine Verbindung. Bitte später nochmal versuchen.'));
+appLaden().catch(keinNetz);
 })();
 </script>
 </body>
